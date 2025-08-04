@@ -60,7 +60,7 @@ FFMPEG_PATH: ty.Optional[str] = get_ffmpeg_path()
 """Relative path to the ffmpeg binary on this system, if any (will be None if not available)."""
 
 DEFAULT_FFMPEG_ARGS = (
-    "-map 0:v:0 -map 0:a? -map 0:s? -c:v libx264 -preset veryfast -crf 22 -c:a aac"
+    "-threads 2 -map 0:v:0 -map 0:a:0 -c:v libx264 -preset veryfast -crf 22 -c:a aac -sn"
 )
 """Default arguments passed to ffmpeg when invoking the `split_video_ffmpeg` function."""
 
@@ -247,13 +247,14 @@ def split_video_mkvmerge(
         logger.error("Error splitting video (mkvmerge returned %d).", ret_val)
     return ret_val
 
+
 def split_video_ffmpeg(
     input_video_path: str,
     scene_list: ty.Iterable[TimecodePair],
     output_dir: ty.Optional[Path] = None,
     output_file_template: str = "$VIDEO_NAME-Scene-$SCENE_NUMBER.mp4",
     video_name: ty.Optional[str] = None,
-    output_fps:int = 25,
+    output_fps: int = 25,
     arg_override: str = DEFAULT_FFMPEG_ARGS,
     show_progress: bool = False,
     show_output: bool = False,
@@ -359,7 +360,7 @@ def split_video_ffmpeg(
                 "-t",
                 str(duration.get_seconds()),
                 "-r",
-                str(output_fps)
+                str(output_fps),
             ]
             call_list += arg_override
             call_list += ["-sn"]
