@@ -59,9 +59,7 @@ for details.  Sorry about that!
 FFMPEG_PATH: ty.Optional[str] = get_ffmpeg_path()
 """Relative path to the ffmpeg binary on this system, if any (will be None if not available)."""
 
-DEFAULT_FFMPEG_ARGS = (
-    "-threads 2 -map 0:v:0 -map 0:a:0 -c:v libx264 -preset veryfast -crf 22 -c:a aac -sn"
-)
+DEFAULT_FFMPEG_ARGS = "-map 0:v:0 -map 0:a:0 -c:v libx264 -preset veryfast -crf 22 -c:a aac -sn"
 """Default arguments passed to ffmpeg when invoking the `split_video_ffmpeg` function."""
 
 ##
