@@ -220,7 +220,7 @@ def invoke_command(args: ty.List[str]) -> int:
         CommandTooLong: `args` exceeds built in command line length limit on Windows.
     """
     try:
-        return subprocess.call(args)
+        return subprocess.call(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except OSError as err:
         if os.name != "nt":
             raise

@@ -40,6 +40,7 @@ import typing as ty
 from dataclasses import dataclass
 from pathlib import Path
 import re
+import gc
 
 
 from scenedetect.common import FrameTimecode, TimecodePair
@@ -362,6 +363,7 @@ def split_video_ffmpeg(
             ]
             call_list += arg_override
             call_list += ["-sn"]
+            call_list += ["-threads", "1"]
             call_list += [str(output_path)]
             ret_val = invoke_command(call_list)
             if show_output and i == 0 and len(scene_list) > 1:
@@ -374,6 +376,8 @@ def split_video_ffmpeg(
                 break
             if progress_bar:
                 progress_bar.update(duration.get_frames())
+            
+            gc.collect()
 
         if progress_bar:
             progress_bar.close()
