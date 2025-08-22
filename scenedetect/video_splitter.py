@@ -363,7 +363,7 @@ def split_video_ffmpeg(
             ]
             call_list += arg_override
             call_list += ["-sn"]
-            call_list += ["-threads", "1"]
+            call_list += ["-threads", "2"]
             call_list += [str(output_path)]
             ret_val = invoke_command(call_list)
             if show_output and i == 0 and len(scene_list) > 1:
