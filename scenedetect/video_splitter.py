@@ -393,18 +393,21 @@ def split_video_ffmpeg(
     )
 
     try:
-        # total_frames = scene_list[-1][1].get_frames() - scene_list[0][0].get_frames()
-        cmd = [FFMPEG_PATH if FFMPEG_PATH is not None else "ffmpeg"]
-        cmd += ["-nostdin", "-y", "-v", "error"]
-        cmd += build_ffmpeg_command(
-            input_video_path, scene_list, formatter, video_metadata, arg_override, output_dir, output_fps
-        )
-        ret_val = invoke_command(cmd)
-        # print(" ".join(cmd))
-        if ret_val != 0:
-            logger.error(f"Error splitting video (ffmpeg returned {ret_val}).")
+        step_size = 5
+        for idx in range(len(scene_list), step_size):
+            # total_frames = scene_list[-1][1].get_frames() - scene_list[0][0].get_frames()
+            cmd = [FFMPEG_PATH if FFMPEG_PATH is not None else "ffmpeg"]
+            cmd += ["-nostdin", "-y", "-v", "error"]
+            cmd += build_ffmpeg_command(
+                input_video_path, scene_list[idx:idx+step_size], formatter, video_metadata, 
+                arg_override, output_dir, output_fps
+            )
+            ret_val = invoke_command(cmd)
+            # print(" ".join(cmd))
+            if ret_val != 0:
+                logger.error(f"Error splitting video (ffmpeg returned {ret_val}).")
 
-        gc.collect()
+            gc.collect()
 
     except CommandTooLong:
         logger.error(COMMAND_TOO_LONG_STRING)
