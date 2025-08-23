@@ -257,7 +257,7 @@ def split_video_mkvmerge(
     return ret_val
 
 
-def build_ffmpeg_command(input_video_path, scene_list, formatter, video_metadata):
+def build_ffmpeg_command(input_video_path, scene_list, formatter, video_metadata, arg_override):
     """
     input_video_path : str
     scene_list       : list of (start_time, end_time) in seconds
@@ -301,9 +301,9 @@ def build_ffmpeg_command(input_video_path, scene_list, formatter, video_metadata
         "-filter_threads",
         "2",
         "-filter_complex",
-        f"{filter_complex_str[:-1]}",
+        f"{(filter_complex_str[:-1])}",
     ]
-
+    cmd += arg_override
     # add mapping for each output
     for i, out in enumerate(output_paths):
         cmd += ["-map", f"[v{i}t]", "-map", f"[a{i}t]", out]
@@ -382,23 +382,18 @@ def split_video_ffmpeg(
     )
 
     try:
-        progress_bar = None
         total_frames = scene_list[-1][1].get_frames() - scene_list[0][0].get_frames()
-        if show_progress:
-            progress_bar = tqdm(
-                total=total_frames, unit="frame", miniters=1, dynamic_ncols=True
-            )
 
         cmd = [FFMPEG_PATH if FFMPEG_PATH is not None else "ffmpeg"]
         cmd += ["-nostdin", "-y", "-v", "error"]
         cmd += build_ffmpeg_command(
-            input_video_path, scene_list, formatter, video_metadata
+            input_video_path, scene_list, formatter, video_metadata, arg_override
         )
-        cmd += arg_override
         cmd += ["-threads", "2"]
         ret_val = invoke_command(cmd)
+        # print(" ".join(cmd))
         if ret_val != 0:
-            logger.error("Error splitting video (ffmpeg returned %d).", ret_val)
+            logger.error(f"Error splitting video (ffmpeg returned {ret_val}).")
 
         gc.collect()
 

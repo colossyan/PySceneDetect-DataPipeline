@@ -221,18 +221,9 @@ def invoke_command(args: ty.List[str]) -> int:
     """
     try:
         try:
-            result = subprocess.run(args,
-                check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True  # decode bytes -> str
-            )
-            return result
+            return subprocess.call(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except subprocess.CalledProcessError as e:
-            print("❌ FFmpeg failed!")
-            print("Return code:", e.returncode)
-            print("Error output:\n", e.stderr)   # full ffmpeg log
-        # return subprocess.call(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            print(f"FFmpeg failed - {e}")
     except OSError as err:
         if os.name != "nt":
             raise
