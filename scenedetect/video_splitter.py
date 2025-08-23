@@ -257,7 +257,7 @@ def split_video_mkvmerge(
     return ret_val
 
 
-def build_ffmpeg_command(input_video_path, scene_list, formatter, video_metadata, arg_override):
+def build_ffmpeg_command(input_video_path, scene_list, formatter, video_metadata, arg_override, output_dir, output_fps):
     """
     input_video_path : str
     scene_list       : list of (start_time, end_time) in seconds
@@ -285,8 +285,18 @@ def build_ffmpeg_command(input_video_path, scene_list, formatter, video_metadata
         )
         durations.append(end - start)
         scene_metadata = SceneMetadata(index=i, start=start, end=end)
+
+        output_path = Path(formatter(scene=scene_metadata, video=video_metadata))
+        if output_dir:
+            output_path = Path(output_dir) / output_path
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path = re.sub(
+            r"(P\d+)-S(\d+)-F(\d+)-F(\d+)-FPS(\d+)",
+            r"\1_S\2_F\3_F\4_FPS\5",
+            str(output_path),
+        )
         output_paths.append(
-            str(Path(formatter(scene=scene_metadata, video=video_metadata)))
+            str(output_path)
         )
 
     # join filter graph
@@ -304,6 +314,7 @@ def build_ffmpeg_command(input_video_path, scene_list, formatter, video_metadata
         f"{(filter_complex_str[:-1])}",
     ]
     cmd += arg_override
+    cmd += ["-r",  str(output_fps)] 
     # add mapping for each output
     for i, out in enumerate(output_paths):
         cmd += ["-map", f"[v{i}t]", "-map", f"[a{i}t]", out]
@@ -382,14 +393,12 @@ def split_video_ffmpeg(
     )
 
     try:
-        total_frames = scene_list[-1][1].get_frames() - scene_list[0][0].get_frames()
-
+        # total_frames = scene_list[-1][1].get_frames() - scene_list[0][0].get_frames()
         cmd = [FFMPEG_PATH if FFMPEG_PATH is not None else "ffmpeg"]
         cmd += ["-nostdin", "-y", "-v", "error"]
         cmd += build_ffmpeg_command(
-            input_video_path, scene_list, formatter, video_metadata, arg_override
+            input_video_path, scene_list, formatter, video_metadata, arg_override, output_dir, output_fps
         )
-        cmd += ["-threads", "2"]
         ret_val = invoke_command(cmd)
         # print(" ".join(cmd))
         if ret_val != 0:
