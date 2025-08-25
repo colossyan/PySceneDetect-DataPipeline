@@ -386,6 +386,8 @@ def split_video_ffmpeg(
             if progress_bar:
                 progress_bar.update(duration.get_frames())
 
+            gc.collect()
+
         if progress_bar:
             progress_bar.close()
         if show_output:
