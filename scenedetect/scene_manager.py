@@ -970,8 +970,8 @@ class SceneManager:
         self._frame_size: ty.Tuple[int, int] = None
         self._frame_size_errors: int = 0
         self._base_timecode: ty.Optional[FrameTimecode] = None
-        self._downscale: int = 3
-        self._auto_downscale: bool = False
+        self._downscale: int = 1
+        self._auto_downscale: bool = True
         # Interpolation method to use when downscaling. Defaults to linear interpolation
         # as a good balance between quality and performance.
         self._interpolation: Interpolation = Interpolation.LINEAR
@@ -1234,7 +1234,6 @@ class SceneManager:
             raise ValueError("end_time must be greater than or equal to 0!")
 
         effective_frame_size = video.frame_size
-    
         if self._crop:
             logger.debug(f"Crop set: top left = {self.crop[0:2]}, bottom right = {self.crop[2:4]}")
             x0, y0, x1, y1 = self._crop
@@ -1256,7 +1255,7 @@ class SceneManager:
             w, __ = effective_frame_size
             downscale_factor = round(w / 1280)
             downscale_factor = 1 if downscale_factor < 1 else downscale_factor
-            downscale_factor = self._downscale
+        
         logger.info(
             "Processing resolution: %d x %d, downscale: %1.1f",
             int(effective_frame_size[0] / downscale_factor),
