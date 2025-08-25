@@ -66,8 +66,8 @@ for details.  Sorry about that!
 FFMPEG_PATH: ty.Optional[str] = get_ffmpeg_path()
 """Relative path to the ffmpeg binary on this system, if any (will be None if not available)."""
 
-# DEFAULT_FFMPEG_ARGS = "-c:v libx264 -preset veryfast -crf 22 -c:a aac -sn -threads 2"
 DEFAULT_FFMPEG_ARGS = "-map 0:v:0 -map 0:a:0 -c:v libx264 -preset veryfast -crf 22 -c:a aac -sn -threads 2"
+DEFAULT_FFMPEG_ARGS_COMPLEX = "-c:v libx264 -preset veryfast -crf 22 -c:a aac -sn -threads 2"
 """Default arguments passed to ffmpeg when invoking the `split_video_ffmpeg` function."""
 
 ##
@@ -257,6 +257,7 @@ def split_video_mkvmerge(
         logger.error("Error splitting video (mkvmerge returned %d).", ret_val)
     return ret_val
 
+
 def split_video_ffmpeg(
     input_video_path: str,
     scene_list: ty.Iterable[TimecodePair],
@@ -372,7 +373,6 @@ def split_video_ffmpeg(
                 str(output_fps),
             ]
             call_list += arg_override
-            call_list += ["-sn"]
             call_list += [str(output_path)]
             ret_val = invoke_command(call_list)
             if show_output and i == 0 and len(scene_list) > 1:
@@ -403,7 +403,8 @@ def split_video_ffmpeg(
         )
     return ret_val
 
-def build_ffmpeg_command(input_video_path, scene_list, formatter, video_metadata, arg_override, output_dir, output_fps):
+
+def build_ffmpeg_complex_splits_command(input_video_path, scene_list, formatter, video_metadata, arg_override, output_dir, output_fps):
     """
     input_video_path : str
     scene_list       : list of (start_time, end_time) in seconds
@@ -468,18 +469,14 @@ def build_ffmpeg_command(input_video_path, scene_list, formatter, video_metadata
     return cmd
 
 
-def split_video_ffmpeg_filter(
+def split_video_ffmpeg_filter_complex(
     input_video_path: str,
     scene_list: ty.Iterable[TimecodePair],
     output_dir: ty.Optional[Path] = None,
     output_file_template: str = "$VIDEO_NAME-Scene-$SCENE_NUMBER.mp4",
     video_name: ty.Optional[str] = None,
     output_fps: int = 25,
-    arg_override: str = DEFAULT_FFMPEG_ARGS,
-    show_progress: bool = False,
-    show_output: bool = False,
-    suppress_output=None,
-    hide_progress=None,
+    arg_override: str = DEFAULT_FFMPEG_ARGS_COMPLEX,
     formatter: ty.Optional[PathFormatter] = None,
 ) -> int:
     """Calls the ffmpeg command on the input video, generating a new video for
@@ -496,10 +493,6 @@ def split_video_ffmpeg_filter(
         video_name (str): Name of the video to be substituted in output_file_template. If not
             passed will be calculated from input_video_path automatically.
         arg_override (str): Allows overriding the arguments passed to ffmpeg for encoding.
-        show_progress (bool): If True, will show progress bar provided by tqdm (if installed).
-        show_output (bool): If True, will show output from ffmpeg for first split.
-        suppress_output: [DEPRECATED] DO NOT USE. For backwards compatibility only.
-        hide_progress: [DEPRECATED] DO NOT USE. For backwards compatibility only.
         formatter: Custom formatter callback. Overrides `output_file_template`.
 
     Returns:
@@ -539,21 +532,17 @@ def split_video_ffmpeg_filter(
     )
 
     try:
-        step_size = 5
-        for idx in range(len(scene_list), step_size):
-            # total_frames = scene_list[-1][1].get_frames() - scene_list[0][0].get_frames()
-            cmd = [FFMPEG_PATH if FFMPEG_PATH is not None else "ffmpeg"]
-            cmd += ["-nostdin", "-y", "-v", "error"]
-            cmd += build_ffmpeg_command(
-                input_video_path, scene_list[idx:idx+step_size], formatter, video_metadata, 
-                arg_override, output_dir, output_fps
-            )
-            ret_val = invoke_command(cmd)
-            # print(" ".join(cmd))
-            if ret_val != 0:
-                logger.error(f"Error splitting video (ffmpeg returned {ret_val}).")
-
-            gc.collect()
+        # total_frames = scene_list[-1][1].get_frames() - scene_list[0][0].get_frames()
+        cmd = [FFMPEG_PATH if FFMPEG_PATH is not None else "ffmpeg"]
+        cmd += ["-nostdin", "-y", "-v", "error"]
+        cmd += build_ffmpeg_complex_splits_command(
+            input_video_path, scene_list, formatter, video_metadata, 
+            arg_override, output_dir, output_fps
+        )
+        ret_val = invoke_command(cmd)
+        if ret_val != 0:
+            logger.error(f"Error splitting video (ffmpeg returned {ret_val}).")
+        gc.collect()
 
     except CommandTooLong:
         logger.error(COMMAND_TOO_LONG_STRING)
@@ -563,4 +552,3 @@ def split_video_ffmpeg_filter(
             " Please install ffmpeg to enable video output support."
         )
     return ret_val
-
