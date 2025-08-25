@@ -66,7 +66,8 @@ for details.  Sorry about that!
 FFMPEG_PATH: ty.Optional[str] = get_ffmpeg_path()
 """Relative path to the ffmpeg binary on this system, if any (will be None if not available)."""
 
-DEFAULT_FFMPEG_ARGS = "-c:v libx264 -preset veryfast -crf 22 -c:a aac -sn -threads 2"
+# DEFAULT_FFMPEG_ARGS = "-c:v libx264 -preset veryfast -crf 22 -c:a aac -sn -threads 2"
+DEFAULT_FFMPEG_ARGS = "-map 0:v:0 -map 0:a:0 -c:v libx264 -preset veryfast -crf 22 -c:a aac -sn -threads 2"
 """Default arguments passed to ffmpeg when invoking the `split_video_ffmpeg` function."""
 
 ##
@@ -256,6 +257,151 @@ def split_video_mkvmerge(
         logger.error("Error splitting video (mkvmerge returned %d).", ret_val)
     return ret_val
 
+def split_video_ffmpeg(
+    input_video_path: str,
+    scene_list: ty.Iterable[TimecodePair],
+    output_dir: ty.Optional[Path] = None,
+    output_file_template: str = "$VIDEO_NAME-Scene-$SCENE_NUMBER.mp4",
+    video_name: ty.Optional[str] = None,
+    output_fps: int = 25,
+    arg_override: str = DEFAULT_FFMPEG_ARGS,
+    show_progress: bool = False,
+    show_output: bool = False,
+    suppress_output=None,
+    hide_progress=None,
+    formatter: ty.Optional[PathFormatter] = None,
+) -> int:
+    """Calls the ffmpeg command on the input video, generating a new video for
+    each scene based on the start/end timecodes.
+
+    Arguments:
+        input_video_path: Path to the video to be split.
+        scene_list (List[ty.Tuple[FrameTimecode, FrameTimecode]]): List of scenes
+            (pairs of FrameTimecodes) denoting the start/end frames of each scene.
+        output_dir: Directory to output videos. If not set, output will be in working directory.
+        output_file_template (str): Template to use for generating output filenames.
+            The following variables will be replaced in the template for each scene:
+            $VIDEO_NAME, $SCENE_NUMBER, $START_TIME, $END_TIME, $START_FRAME, $END_FRAME
+        video_name (str): Name of the video to be substituted in output_file_template. If not
+            passed will be calculated from input_video_path automatically.
+        arg_override (str): Allows overriding the arguments passed to ffmpeg for encoding.
+        show_progress (bool): If True, will show progress bar provided by tqdm (if installed).
+        show_output (bool): If True, will show output from ffmpeg for first split.
+        suppress_output: [DEPRECATED] DO NOT USE. For backwards compatibility only.
+        hide_progress: [DEPRECATED] DO NOT USE. For backwards compatibility only.
+        formatter: Custom formatter callback. Overrides `output_file_template`.
+
+    Returns:
+        Return code of invoking ffmpeg (0 on success). If scene_list is empty, will
+        still return 0, but no commands will be invoked.
+    """
+    # Handle backwards compatibility with v0.5 API.
+    if isinstance(input_video_path, list):
+        logger.error("Using a list of paths is deprecated. Pass a single path instead.")
+        if len(input_video_path) > 1:
+            raise ValueError("Concatenating multiple input videos is not supported.")
+        input_video_path = input_video_path[0]
+    if suppress_output is not None:
+        logger.error("suppress_output is deprecated, use show_output instead.")
+        show_output = not suppress_output
+    if hide_progress is not None:
+        logger.error("hide_progress is deprecated, use show_progress instead.")
+        show_progress = not hide_progress
+
+    if not scene_list:
+        return 0
+
+    logger.info("Splitting video with ffmpeg, output path template:\n  %s", output_file_template)
+    if output_dir:
+        logger.info("Output folder:\n  %s", output_file_template)
+
+    if video_name is None:
+        video_name = Path(input_video_path).stem
+
+    arg_override = arg_override.replace('\\"', '"')
+
+    ret_val = 0
+    arg_override = arg_override.split(" ")
+    scene_num_format = "%0"
+    scene_num_format += str(max(3, math.floor(math.log(len(scene_list), 10)) + 1)) + "d"
+
+    if formatter is None:
+        formatter = default_formatter(output_file_template)
+    video_metadata = VideoMetadata(
+        name=video_name, path=input_video_path, total_scenes=len(scene_list)
+    )
+
+    try:
+        progress_bar = None
+        total_frames = scene_list[-1][1].get_frames() - scene_list[0][0].get_frames()
+        if show_progress:
+            progress_bar = tqdm(total=total_frames, unit="frame", miniters=1, dynamic_ncols=True)
+        processing_start_time = time.time()
+        for i, (start_time, end_time) in enumerate(scene_list):
+            duration = end_time - start_time
+            scene_metadata = SceneMetadata(index=i, start=start_time, end=end_time)
+            output_path = Path(formatter(scene=scene_metadata, video=video_metadata))
+            if output_dir:
+                output_path = Path(output_dir) / output_path
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path = re.sub(
+                r"(P\d+)-S(\d+)-F(\d+)-F(\d+)-FPS(\d+)",
+                r"\1_S\2_F\3_F\4_FPS\5",
+                str(output_path),
+            )
+
+            # Gracefully handle case where FFMPEG_PATH might be unset.
+            call_list = [FFMPEG_PATH if FFMPEG_PATH is not None else "ffmpeg"]
+            if not show_output:
+                call_list += ["-v", "quiet"]
+            elif i > 0:
+                # Only show ffmpeg output for the first call, which will display any
+                # errors if it fails, and then break the loop. We only show error messages
+                # for the remaining calls.
+                call_list += ["-v", "error"]
+            call_list += [
+                "-nostdin",
+                "-y",
+                "-ss",
+                str(start_time.get_seconds()),
+                "-i",
+                input_video_path,
+                "-t",
+                str(duration.get_seconds()),
+                "-r",
+                str(output_fps),
+            ]
+            call_list += arg_override
+            call_list += ["-sn"]
+            call_list += [str(output_path)]
+            ret_val = invoke_command(call_list)
+            if show_output and i == 0 and len(scene_list) > 1:
+                logger.info(
+                    "Output from ffmpeg for Scene 1 shown above, splitting remaining scenes..."
+                )
+            if ret_val != 0:
+                # TODO: Capture stdout/stderr and display it on any failed calls.
+                logger.error("Error splitting video (ffmpeg returned %d).", ret_val)
+                break
+            if progress_bar:
+                progress_bar.update(duration.get_frames())
+
+        if progress_bar:
+            progress_bar.close()
+        if show_output:
+            logger.info(
+                "Average processing speed %.2f frames/sec.",
+                float(total_frames) / (time.time() - processing_start_time),
+            )
+
+    except CommandTooLong:
+        logger.error(COMMAND_TOO_LONG_STRING)
+    except OSError:
+        logger.error(
+            "ffmpeg could not be found on the system."
+            " Please install ffmpeg to enable video output support."
+        )
+    return ret_val
 
 def build_ffmpeg_command(input_video_path, scene_list, formatter, video_metadata, arg_override, output_dir, output_fps):
     """
@@ -322,7 +468,7 @@ def build_ffmpeg_command(input_video_path, scene_list, formatter, video_metadata
     return cmd
 
 
-def split_video_ffmpeg(
+def split_video_ffmpeg_filter(
     input_video_path: str,
     scene_list: ty.Iterable[TimecodePair],
     output_dir: ty.Optional[Path] = None,
@@ -417,3 +563,4 @@ def split_video_ffmpeg(
             " Please install ffmpeg to enable video output support."
         )
     return ret_val
+
