@@ -40,10 +40,17 @@ import typing as ty
 from dataclasses import dataclass
 from pathlib import Path
 import re
+import gc
 
 
 from scenedetect.common import FrameTimecode, TimecodePair
-from scenedetect.platform import CommandTooLong, Template, get_ffmpeg_path, invoke_command, tqdm
+from scenedetect.platform import (
+    CommandTooLong,
+    Template,
+    get_ffmpeg_path,
+    invoke_command,
+    tqdm,
+)
 
 logger = logging.getLogger("pyscenedetect")
 
@@ -59,7 +66,8 @@ for details.  Sorry about that!
 FFMPEG_PATH: ty.Optional[str] = get_ffmpeg_path()
 """Relative path to the ffmpeg binary on this system, if any (will be None if not available)."""
 
-DEFAULT_FFMPEG_ARGS = "-map 0:v:0 -map 0:a:0 -c:v libx264 -preset veryfast -crf 22 -c:a aac -sn"
+DEFAULT_FFMPEG_ARGS = "-map 0:v:0 -map 0:a:0 -c:v libx264 -preset veryfast -crf 22 -c:a aac -sn -threads 2"
+DEFAULT_FFMPEG_ARGS_COMPLEX = "-c:v libx264 -preset veryfast -crf 22 -c:a aac -sn -threads 2"
 """Default arguments passed to ffmpeg when invoking the `split_video_ffmpeg` function."""
 
 ##
@@ -131,7 +139,11 @@ def default_formatter(template: str) -> PathFormatter:
     """
     MIN_DIGITS = 3
     format_scene_number: PathFormatter = lambda video, scene: (
-        ("%0" + str(max(MIN_DIGITS, math.floor(math.log(video.total_scenes, 10)) + 1)) + "d")
+        (
+            "%0"
+            + str(max(MIN_DIGITS, math.floor(math.log(video.total_scenes, 10)) + 1))
+            + "d"
+        )
         % (scene.index + 1)
     )
     formatter: PathFormatter = lambda video, scene: Template(template).safe_substitute(
@@ -361,7 +373,6 @@ def split_video_ffmpeg(
                 str(output_fps),
             ]
             call_list += arg_override
-            call_list += ["-sn"]
             call_list += [str(output_path)]
             ret_val = invoke_command(call_list)
             if show_output and i == 0 and len(scene_list) > 1:
@@ -375,6 +386,8 @@ def split_video_ffmpeg(
             if progress_bar:
                 progress_bar.update(duration.get_frames())
 
+            gc.collect()
+
         if progress_bar:
             progress_bar.close()
         if show_output:
@@ -382,6 +395,156 @@ def split_video_ffmpeg(
                 "Average processing speed %.2f frames/sec.",
                 float(total_frames) / (time.time() - processing_start_time),
             )
+
+    except CommandTooLong:
+        logger.error(COMMAND_TOO_LONG_STRING)
+    except OSError:
+        logger.error(
+            "ffmpeg could not be found on the system."
+            " Please install ffmpeg to enable video output support."
+        )
+    return ret_val
+
+
+def build_ffmpeg_complex_splits_command(input_video_path, scene_list, formatter, video_metadata, arg_override, output_dir, output_fps):
+    """
+    input_video_path : str
+    scene_list       : list of (start_time, end_time) in seconds
+    output_paths     : list of str output filenames
+    """
+    n = len(scene_list)
+    durations = []
+    output_paths = []
+
+    # split/asplit heads
+    filter_complex = [
+        f"[0:v]split={n}" + "".join(f"[v{i}]" for i in range(n)) + ";",
+        f"[0:a]asplit={n}" + "".join(f"[a{i}]" for i in range(n)) + ";",
+    ]
+
+    # build each trim/atrim
+    for i, (start, end) in enumerate(scene_list):
+        ss = start.get_seconds()
+        es = end.get_seconds()
+        filter_complex.append(
+            f"[v{i}]trim=start={ss}:end={es},setpts=PTS-STARTPTS[v{i}t];"
+        )
+        filter_complex.append(
+            f"[a{i}]atrim=start={ss}:end={es},asetpts=PTS-STARTPTS[a{i}t];"
+        )
+        durations.append(end - start)
+        scene_metadata = SceneMetadata(index=i, start=start, end=end)
+
+        output_path = Path(formatter(scene=scene_metadata, video=video_metadata))
+        if output_dir:
+            output_path = Path(output_dir) / output_path
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path = re.sub(
+            r"(P\d+)-S(\d+)-F(\d+)-F(\d+)-FPS(\d+)",
+            r"\1_S\2_F\3_F\4_FPS\5",
+            str(output_path),
+        )
+        output_paths.append(
+            str(output_path)
+        )
+
+    # join filter graph
+    filter_complex_str = " ".join(filter_complex)
+
+    # base ffmpeg command
+    cmd = [
+        "-i",
+        input_video_path,
+        "-filter_complex_threads",
+        "2",
+        "-filter_threads",
+        "2",
+        "-filter_complex",
+        f"{(filter_complex_str[:-1])}",
+    ]
+    cmd += arg_override
+    cmd += ["-r",  str(output_fps)] 
+    # add mapping for each output
+    for i, out in enumerate(output_paths):
+        cmd += ["-map", f"[v{i}t]", "-map", f"[a{i}t]", out]
+
+    return cmd
+
+
+def split_video_ffmpeg_filter_complex(
+    input_video_path: str,
+    scene_list: ty.Iterable[TimecodePair],
+    output_dir: ty.Optional[Path] = None,
+    output_file_template: str = "$VIDEO_NAME-Scene-$SCENE_NUMBER.mp4",
+    video_name: ty.Optional[str] = None,
+    output_fps: int = 25,
+    arg_override: str = DEFAULT_FFMPEG_ARGS_COMPLEX,
+    formatter: ty.Optional[PathFormatter] = None,
+) -> int:
+    """Calls the ffmpeg command on the input video, generating a new video for
+    each scene based on the start/end timecodes.
+
+    Arguments:
+        input_video_path: Path to the video to be split.
+        scene_list (List[ty.Tuple[FrameTimecode, FrameTimecode]]): List of scenes
+            (pairs of FrameTimecodes) denoting the start/end frames of each scene.
+        output_dir: Directory to output videos. If not set, output will be in working directory.
+        output_file_template (str): Template to use for generating output filenames.
+            The following variables will be replaced in the template for each scene:
+            $VIDEO_NAME, $SCENE_NUMBER, $START_TIME, $END_TIME, $START_FRAME, $END_FRAME
+        video_name (str): Name of the video to be substituted in output_file_template. If not
+            passed will be calculated from input_video_path automatically.
+        arg_override (str): Allows overriding the arguments passed to ffmpeg for encoding.
+        formatter: Custom formatter callback. Overrides `output_file_template`.
+
+    Returns:
+        Return code of invoking ffmpeg (0 on success). If scene_list is empty, will
+        still return 0, but no commands will be invoked.
+    """
+    # Handle backwards compatibility with v0.5 API.
+    if isinstance(input_video_path, list):
+        logger.error("Using a list of paths is deprecated. Pass a single path instead.")
+        if len(input_video_path) > 1:
+            raise ValueError("Concatenating multiple input videos is not supported.")
+        input_video_path = input_video_path[0]
+
+    if not scene_list:
+        return 0
+
+    logger.info(
+        "Splitting video with ffmpeg, output path template:\n  %s", output_file_template
+    )
+    if output_dir:
+        logger.info("Output folder:\n  %s", output_file_template)
+
+    if video_name is None:
+        video_name = Path(input_video_path).stem
+
+    arg_override = arg_override.replace('\\"', '"')
+
+    ret_val = 0
+    arg_override = arg_override.split(" ")
+    scene_num_format = "%0"
+    scene_num_format += str(max(3, math.floor(math.log(len(scene_list), 10)) + 1)) + "d"
+
+    if formatter is None:
+        formatter = default_formatter(output_file_template)
+    video_metadata = VideoMetadata(
+        name=video_name, path=input_video_path, total_scenes=len(scene_list)
+    )
+
+    try:
+        # total_frames = scene_list[-1][1].get_frames() - scene_list[0][0].get_frames()
+        cmd = [FFMPEG_PATH if FFMPEG_PATH is not None else "ffmpeg"]
+        cmd += ["-nostdin", "-y", "-v", "error"]
+        cmd += build_ffmpeg_complex_splits_command(
+            input_video_path, scene_list, formatter, video_metadata, 
+            arg_override, output_dir, output_fps
+        )
+        ret_val = invoke_command(cmd)
+        if ret_val != 0:
+            logger.error(f"Error splitting video (ffmpeg returned {ret_val}).")
+        gc.collect()
 
     except CommandTooLong:
         logger.error(COMMAND_TOO_LONG_STRING)

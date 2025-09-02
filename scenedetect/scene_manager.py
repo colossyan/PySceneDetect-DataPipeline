@@ -1186,6 +1186,7 @@ class SceneManager:
         show_progress: bool = False,
         callback: ty.Optional[ty.Callable[[np.ndarray, int], None]] = None,
         frame_source: ty.Optional[VideoStream] = None,
+        detection_fps: int = 5
     ) -> int:
         """Perform scene detection on the given video using the added SceneDetectors, returning the
         number of frames processed. Results can be obtained by calling :meth:`get_scene_list` or
@@ -1252,8 +1253,11 @@ class SceneManager:
         if self.auto_downscale:
             downscale_factor = compute_downscale_factor(max(effective_frame_size))
         else:
-            downscale_factor = self.downscale
-        logger.debug(
+            w, __ = effective_frame_size
+            downscale_factor = round(w / 1280)
+            downscale_factor = 1 if downscale_factor < 1 else downscale_factor
+        
+        logger.info(
             "Processing resolution: %d x %d, downscale: %1.1f",
             int(effective_frame_size[0] / downscale_factor),
             int(effective_frame_size[1] / downscale_factor),
@@ -1292,7 +1296,7 @@ class SceneManager:
         self._stop.clear()
         decode_thread = threading.Thread(
             target=SceneManager._decode_thread,
-            args=(self, video, frame_skip, downscale_factor, end_time, frame_queue),
+            args=(self, video, frame_skip, downscale_factor, end_time, frame_queue, detection_fps),
             daemon=True,
         )
         decode_thread.start()
@@ -1339,6 +1343,7 @@ class SceneManager:
         downscale_factor: float,
         end_time: FrameTimecode,
         out_queue: queue.Queue,
+        detection_fps: int
     ):
         try:
             while not self._stop.is_set():
@@ -1346,7 +1351,7 @@ class SceneManager:
                 # We don't do any kind of locking here since the worst-case of this being wrong
                 # is that we do some extra work, and this function should never mutate any data
                 # (all of which should be modified under the GIL).
-                frame_im = video.read()
+                frame_im = video.read_fps(target_fps=detection_fps)
                 if frame_im is False:
                     break
                 # Verify the decoded frame size against the video container's reported
@@ -1394,7 +1399,7 @@ class SceneManager:
 
                 if frame_skip > 0:
                     for _ in range(frame_skip):
-                        if not video.read(decode=False):
+                        if not video.read_fps(decode=False, target_fps=detection_fps):
                             break
                 # End time includes the presentation time of the frame, but the `position`
                 # property of a VideoStream references the beginning of the frame in time.
