@@ -26,7 +26,12 @@ from logging import getLogger
 import cv2
 import numpy as np
 
-from scenedetect.common import _USE_PTS_IN_DEVELOPMENT, MAX_FPS_DELTA, FrameTimecode, Timecode
+from scenedetect.common import (
+    _USE_PTS_IN_DEVELOPMENT,
+    MAX_FPS_DELTA,
+    FrameTimecode,
+    Timecode,
+)
 from scenedetect.platform import get_file_name
 from scenedetect.video_stream import (
     FrameRateUnavailable,
@@ -91,7 +96,9 @@ class VideoStreamCv2(VideoStream):
         super().__init__()
         # TODO(v0.7): Replace with DeprecationWarning that `path_or_device` will be removed in v0.8.
         if path_or_device is not None:
-            logger.error("path_or_device is deprecated, use path or VideoCaptureAdapter instead.")
+            logger.error(
+                "path_or_device is deprecated, use path or VideoCaptureAdapter instead."
+            )
             path = path_or_device
         if path is None:
             raise ValueError("Path must be specified!")
@@ -282,7 +289,9 @@ class VideoStreamCv2(VideoStream):
         self._cap.release()
         self._open_capture(self._frame_rate)
 
-    def read(self, decode: bool = True, advance: bool = True) -> ty.Union[np.ndarray, bool]:
+    def read(
+        self, decode: bool = True, advance: bool = True
+    ) -> ty.Union[np.ndarray, bool]:
         """Read and decode the next frame as a np.ndarray. Returns False when video ends,
         or the maximum number of decode attempts has passed.
 
@@ -311,7 +320,9 @@ class VideoStreamCv2(VideoStream):
                     self._decode_failures += 1
                     logger.debug("Frame failed to decode.")
                     if not self._warning_displayed and self._decode_failures > 1:
-                        logger.warning("Failed to decode some frames, results may be inaccurate.")
+                        logger.warning(
+                            "Failed to decode some frames, results may be inaccurate."
+                        )
             # We didn't manage to grab a frame even after retrying, so just return.
             if not has_grabbed:
                 return False
@@ -322,6 +333,42 @@ class VideoStreamCv2(VideoStream):
             return frame
         return self._has_grabbed
 
+    def read_fps(
+        self,
+        target_fps: float = 5.0,
+        decode: bool = True,
+    ) -> ty.Union[np.ndarray, bool]:
+        """Read and decode the next frame, skipping enough frames so that the
+        effective output rate is ~target_fps.
+
+        Arguments:
+            target_fps: Desired output frame rate (e.g. 5.0).
+            decode: If True, decode and return the frame; else only advance.
+
+        Returns:
+            Frame (np.ndarray) or False if end of video.
+        """
+        if not self._cap.isOpened():
+            return False
+
+        input_fps = self.frame_rate
+        if input_fps <= 0:
+            raise FrameRateUnavailable("Input FPS could not be determined.")
+
+        # how many frames to skip between reads
+        skip = max(1, int(round(input_fps / target_fps)))
+
+        # grab/skip frames
+        for _ in range(skip):
+            has_grabbed = self._cap.grab()
+            if not has_grabbed:
+                return False
+
+        if decode:
+            _, frame = self._cap.retrieve()
+            return frame
+        return True
+
     #
     # Private Methods
     #
@@ -331,7 +378,8 @@ class VideoStreamCv2(VideoStream):
         if self._is_device and self._path_or_device < 0:
             raise ValueError("Invalid/negative device ID specified.")
         input_is_video_file = not self._is_device and not any(
-            identifier in self._path_or_device for identifier in NON_VIDEO_FILE_INPUT_IDENTIFIERS
+            identifier in self._path_or_device
+            for identifier in NON_VIDEO_FILE_INPUT_IDENTIFIERS
         )
         # We don't have a way of querying why opening a video fails (errors are logged at least),
         # so provide a better error message if we try to open a file that doesn't exist.
@@ -359,7 +407,9 @@ class VideoStreamCv2(VideoStream):
 
         # Ensure the framerate is correct to avoid potential divide by zero errors. This can be
         # addressed in the PyAV backend if required since it supports integer timebases.
-        assert framerate is None or framerate > MAX_FPS_DELTA, "Framerate must be validated if set!"
+        assert (
+            framerate is None or framerate > MAX_FPS_DELTA
+        ), "Framerate must be validated if set!"
         if framerate is None:
             framerate = cap.get(cv2.CAP_PROP_FPS)
             if framerate < MAX_FPS_DELTA:
@@ -368,7 +418,9 @@ class VideoStreamCv2(VideoStream):
         self._cap = cap
         self._frame_rate = framerate
         self._has_grabbed = False
-        cap.set(cv2.CAP_PROP_ORIENTATION_AUTO, 1.0)  # https://github.com/opencv/opencv/issues/26795
+        cap.set(
+            cv2.CAP_PROP_ORIENTATION_AUTO, 1.0
+        )  # https://github.com/opencv/opencv/issues/26795
 
 
 # TODO(#168): Support non-monotonic timing for `position`. VFR timecode support is a
@@ -529,7 +581,9 @@ class VideoCaptureAdapter(VideoStream):
         """Not supported."""
         raise NotImplementedError("Reset is not supported.")
 
-    def read(self, decode: bool = True, advance: bool = True) -> ty.Union[np.ndarray, bool]:
+    def read(
+        self, decode: bool = True, advance: bool = True
+    ) -> ty.Union[np.ndarray, bool]:
         """Read and decode the next frame as a np.ndarray. Returns False when video ends,
         or the maximum number of decode attempts has passed.
 
@@ -557,7 +611,9 @@ class VideoCaptureAdapter(VideoStream):
                     self._decode_failures += 1
                     logger.debug("Frame failed to decode.")
                     if not self._warning_displayed and self._decode_failures > 1:
-                        logger.warning("Failed to decode some frames, results may be inaccurate.")
+                        logger.warning(
+                            "Failed to decode some frames, results may be inaccurate."
+                        )
             # We didn't manage to grab a frame even after retrying, so just return.
             if not has_grabbed:
                 return False
@@ -566,6 +622,35 @@ class VideoCaptureAdapter(VideoStream):
             self._num_frames += 1
         # Need to make sure we actually grabbed a frame before calling retrieve.
         if decode and self._num_frames > 0:
+            _, frame = self._cap.retrieve()
+            return frame
+        return True
+
+    def read_fps(
+        self, target_fps: float = 5.0, decode: bool = True
+    ) -> ty.Union[np.ndarray, bool]:
+        """Read next frame downsampled to target_fps by skipping intermediate frames."""
+        if not self._cap.isOpened():
+            return False
+
+        input_fps = self.frame_rate
+        if input_fps <= 0:
+            raise FrameRateUnavailable("Input FPS could not be determined.")
+
+        skip = max(1, int(round(input_fps / target_fps)))
+
+        has_grabbed = False
+        for _ in range(skip):
+            has_grabbed = self._cap.grab()
+            if not has_grabbed:
+                return False
+
+        if self._num_frames == 0:
+            # establish baseline timestamp
+            self._time_base = self._cap.get(cv2.CAP_PROP_POS_MSEC)
+        self._num_frames += 1
+
+        if decode and has_grabbed:
             _, frame = self._cap.retrieve()
             return frame
         return True
